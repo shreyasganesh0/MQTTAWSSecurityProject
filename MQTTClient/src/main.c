@@ -48,7 +48,9 @@ void app_main(void)
 
 void on_allow_message(const char* pl) {
   uint8_t node_id;
-  if (sscanf(pl, "%03hhu:OK", &node_id) == 1 && node_id == host.aws_mqtt_id) {
+  uint16_t port;
+  char ip[40];
+  if (sscanf(pl, "%03hhu:OK:%s:%hu", &node_id, ip, &port) == 3 && node_id == host.aws_mqtt_id) {
 
     is_valid = 1;
   } else if (sscanf(pl, "%03hhu:FAIL", &node_id) == 1 && node_id == host.aws_mqtt_id) {
@@ -118,13 +120,15 @@ void respond_to_challenge(host_t* host, const char* challenge_payload) {
 void verify_challenge_response(const char* response_payload, host_t *host) {
     uint32_t received_response;
     uint8_t aws_id;
-    char response_msg[32];
+    uint16_t port; 
+    char ip[40];
+    char response_msg[102];
 
-    if (sscanf(response_payload, "%03hhu:RESPONSE:%08X", &aws_id, &received_response) == 2) {
+    if (sscanf(response_payload, "%03hhu:RESPONSE:%08X:%s:%hu", &aws_id, &received_response, ip, &port) == 4) {
         uint32_t expected_response = compute_response(last_nonce_sent);
         if (received_response == expected_response) {
 
-            sprintf(response_msg, "%03hhu:OK", aws_id);
+            sprintf(response_msg, "%03hhu:OK:%s:%hu", aws_id, ip, port);
             ESP_LOGE("CHALLENGE", "Challenge response verified successfully: %08X", received_response);
             int msg_id = esp_mqtt_client_publish(host->mqtt_client, "control/ok", response_msg, 0, 1, 0);
         } else {

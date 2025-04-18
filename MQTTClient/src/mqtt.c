@@ -38,7 +38,7 @@ void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event
     case MQTT_EVENT_CONNECTED:
         ESP_LOGI(TAG_MQTT, "MQTT_EVENT_CONNECTED");
         if (IS_CONTROL) {
-            esp_mqtt_client_subscribe(client, "device/response", 1);
+            esp_mqtt_client_subscribe(client, "device/response/enriched", 1);
         } else {
             esp_mqtt_client_subscribe(client, "device/challenge", 1);
             esp_mqtt_client_subscribe(client, "control/fail", 1);
@@ -71,7 +71,7 @@ void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event
         if (strcmp(topic, "device/challenge") == 0) {
 
            if (!IS_CONTROL) respond_to_challenge(host, data);
-        } else if (strcmp(topic, "device/response") == 0) {
+        } else if (strcmp(topic, "device/response/enriched") == 0) {
 
            if (IS_CONTROL) verify_challenge_response(data, host);
         } else if (strcmp(topic, "control/ok") == 0) {

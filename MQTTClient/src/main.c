@@ -3,9 +3,9 @@
 #include "esp_log.h"
 #include "mbedtls/md.h"
 
-const char* Wifi_SSID; 
-const char* Wifi_Pass; 
-const uint8_t shared_key[]; 
+const char* Wifi_SSID = "SETUP-1CCC"; 
+const char* Wifi_Pass = "center1832block";
+const uint8_t shared_key[] = {0x8D, 0xEE, 0xF1}; 
 const size_t shared_key_len = sizeof(shared_key);
 
 
@@ -116,10 +116,6 @@ static void compute_hmac_sha256(uint32_t nonce, uint8_t out_hmac[HMAC_LEN]) {
 }
 
 
-uint32_t compute_response(uint32_t nonce) {
-    return nonce ^ shared_key;
-}
-
 void publish_challenge(host_t* host) {
     last_nonce_sent = esp_random();  // Generate a random 32-bit nonce
 
@@ -155,7 +151,7 @@ void respond_to_challenge(host_t* host, const char* payload) {
         }
         hmac_hex[HMAC_LEN*2] = '\0';
 
-        char resp_msg[64];
+        char resp_msg[100];
         // only ID and HMAC
         sprintf(resp_msg, "%03hhu:RESPONSE:%s", host->aws_mqtt_id, hmac_hex);
         esp_mqtt_client_publish(
@@ -172,7 +168,7 @@ void respond_to_challenge(host_t* host, const char* payload) {
 void verify_challenge_response(const char* resp_payload, host_t* host) {
     uint8_t aws_id;
     uint16_t port;
-    char ip[40]
+    char ip[40];
     char    recv_hmac_hex[HMAC_LEN*2 + 1];
 
     if (sscanf(resp_payload, "%03hhu:RESPONSE:%64s:%s:%hu", &aws_id, recv_hmac_hex, ip, &port) == 2) {

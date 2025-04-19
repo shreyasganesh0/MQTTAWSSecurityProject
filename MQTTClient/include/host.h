@@ -25,8 +25,14 @@
 #include "mqtt_client.h"
 #define STR(s) #s
 #define XSTR(s) STR(s)
+
+#ifndef DEV_ID
 #define DEV_ID 001
-#define IS_CONTROL 1
+#endif
+
+#ifndef IS_CONTROL
+#define IS_CONTROL 0
+#endif
 
 #define CHALLENGE_INTERVAL_MS (120000)
 

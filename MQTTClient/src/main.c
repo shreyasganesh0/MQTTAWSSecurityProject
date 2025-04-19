@@ -5,8 +5,8 @@
 
 const char* Wifi_SSID; 
 const char* Wifi_Pass; 
-extern const uint8_t shared_key[];
-extern const size_t   shared_key_len;
+const uint8_t shared_key[]; 
+const size_t shared_key_len = sizeof(shared_key);
 
 
 static uint32_t last_nonce_sent = 0;

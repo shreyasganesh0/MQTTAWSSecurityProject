@@ -1,10 +1,13 @@
 #include "nvs_flash.h"
 #include "host.h"
 #include "esp_log.h"
+#include "mbedtls/md.h"
 
 const char* Wifi_SSID; 
 const char* Wifi_Pass; 
-#const uint32_t shared_key;
+extern const uint8_t shared_key[];
+extern const size_t   shared_key_len;
+
 
 static uint32_t last_nonce_sent = 0;
 
@@ -75,6 +78,43 @@ void send_env_data(host_t* host)
 
   LOG_PRINTF("Sent publish successful, msg_id=%d", msg_id);
 }
+#define HMAC_LEN 32  // SHA‑256 output size
+
+static bool hmac_equal(const uint8_t *a, const uint8_t *b, size_t len) {
+    uint8_t diff = 0;
+    for (size_t i = 0; i < len; i++) {
+        diff |= a[i] ^ b[i];
+    }
+    return diff == 0;
+}
+
+static void hex2bin(const char *hex, uint8_t *out) {
+    for (int i = 0; i < HMAC_LEN; i++) {
+        uint8_t hi = (hex[2*i] <= '9' ? hex[2*i] - '0' : (hex[2*i]&~32) - 'A' + 10);
+        uint8_t lo = (hex[2*i+1] <= '9' ? hex[2*i+1] - '0' : (hex[2*i+1]&~32) - 'A' + 10);
+        out[i] = (hi << 4) | lo;
+    }
+}
+
+static void compute_hmac_sha256(uint32_t nonce, uint8_t out_hmac[HMAC_LEN]) {
+    uint8_t nonce_be[4] = {
+        (nonce >> 24) & 0xFF,
+        (nonce >> 16) & 0xFF,
+        (nonce >>  8) & 0xFF,
+        (nonce      ) & 0xFF,
+    };
+
+    mbedtls_md_context_t ctx;
+    const mbedtls_md_info_t *info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+
+    mbedtls_md_init(&ctx);
+    mbedtls_md_setup(&ctx, info, /* HMAC = */ 1);
+    mbedtls_md_hmac_starts(&ctx, shared_key, shared_key_len);
+    mbedtls_md_hmac_update(&ctx, nonce_be, sizeof(nonce_be));
+    mbedtls_md_hmac_finish(&ctx, out_hmac);
+    mbedtls_md_free(&ctx);
+}
+
 
 uint32_t compute_response(uint32_t nonce) {
     return nonce ^ shared_key;
@@ -100,44 +140,62 @@ void challenge_task(void *pvParameter) {
     }
 }
 
-void respond_to_challenge(host_t* host, const char* challenge_payload) {
+void respond_to_challenge(host_t* host, const char* payload) {
     uint32_t received_nonce;
-    uint8_t aws_sender_id;
+    uint8_t  aws_id;
 
-    if (sscanf(challenge_payload, "%03hhu:CHALLENGE:%08X", &aws_sender_id, &received_nonce) == 2) {
+    if (sscanf(payload, "%03hhu:CHALLENGE:%08X", &aws_id, &received_nonce) == 2) {
+        uint8_t hmac[HMAC_LEN];
+        compute_hmac_sha256(received_nonce, hmac);
 
-        uint32_t response_val = compute_response(received_nonce);
-        char response_msg[32];
-        sprintf(response_msg, "%03hhu:RESPONSE:%08X", host->aws_mqtt_id, response_val);
-        int msg_id = esp_mqtt_client_publish(host->mqtt_client, "device/response", response_msg, 0, 1, 0);
+        // hex‑encode
+        char hmac_hex[HMAC_LEN*2 + 1];
+        for (int i = 0; i < HMAC_LEN; i++) {
+            sprintf(&hmac_hex[i*2], "%02X", hmac[i]);
+        }
+        hmac_hex[HMAC_LEN*2] = '\0';
 
-        ESP_LOGI("CHALLENGE", "Responded to challenge %08X with response: %s, msg_id=%d", received_nonce, response_msg, msg_id);
+        char resp_msg[64];
+        // only ID and HMAC
+        sprintf(resp_msg, "%03hhu:RESPONSE:%s", host->aws_mqtt_id, hmac_hex);
+        esp_mqtt_client_publish(
+            host->mqtt_client,
+            "device/response",
+            resp_msg, 0, 1, 0
+        );
+        ESP_LOGI("CHALLENGE", "Sent HMAC response: %s", resp_msg);
     } else {
-        ESP_LOGE("CHALLENGE", "Invalid challenge format received: %s", challenge_payload);
+        ESP_LOGE("CHALLENGE", "Bad challenge format: %s", payload);
     }
 }
 
-void verify_challenge_response(const char* response_payload, host_t *host) {
-    uint32_t received_response;
+void verify_challenge_response(const char* resp_payload, host_t* host) {
     uint8_t aws_id;
-    uint16_t port; 
-    char ip[40];
-    char response_msg[102];
+    uint16_t port;
+    char ip[40]
+    char    recv_hmac_hex[HMAC_LEN*2 + 1];
 
-    if (sscanf(response_payload, "%03hhu:RESPONSE:%08X:%s:%hu", &aws_id, &received_response, ip, &port) == 4) {
-        uint32_t expected_response = compute_response(last_nonce_sent);
-        if (received_response == expected_response) {
+    if (sscanf(resp_payload, "%03hhu:RESPONSE:%64s:%s:%hu", &aws_id, recv_hmac_hex, ip, &port) == 2) {
+        uint8_t recv_hmac[HMAC_LEN], exp_hmac[HMAC_LEN];
+        hex2bin(recv_hmac_hex, recv_hmac);
+        compute_hmac_sha256(last_nonce_sent, exp_hmac);
 
-            sprintf(response_msg, "%03hhu:OK:%s:%hu", aws_id, ip, port);
-            ESP_LOGE("CHALLENGE", "Challenge response verified successfully: %08X", received_response);
-            int msg_id = esp_mqtt_client_publish(host->mqtt_client, "control/ok", response_msg, 0, 1, 0);
+        if (hmac_equal(exp_hmac, recv_hmac, HMAC_LEN)) {
+            ESP_LOGI("CHALLENGE", "HMAC verified OK");
+            // proceed: publish control/ok...
+            char ok_msg[100];
+            sprintf(ok_msg, "%03hhu:OK:%s:%hu", aws_id, ip, port);
+            esp_mqtt_client_publish(host->mqtt_client, "control/ok",
+                                    ok_msg, 0, 1, 0);
         } else {
-
-            ESP_LOGE("CHALLENGE", "Challenge response verification failed. Expected %08X, got %08X", expected_response, received_response);
-            sprintf(response_msg, "%03hhu:FAIL", aws_id);
-            int msg_id = esp_mqtt_client_publish(host->mqtt_client, "control/fail", response_msg, 0, 1, 0);
+            ESP_LOGW("CHALLENGE", "HMAC mismatch");
+            char fail_msg[100];
+            sprintf(fail_msg, "%03hhu:FAIL:%s:%hu", aws_id, ip, port);
+            esp_mqtt_client_publish(host->mqtt_client, "control/fail",
+                                    fail_msg, 0, 1, 0);
         }
     } else {
-        ESP_LOGE("CHALLENGE", "Invalid response format received: %s", response_payload);
+        ESP_LOGE("CHALLENGE", "Bad response format: %s", resp_payload);
     }
 }
+

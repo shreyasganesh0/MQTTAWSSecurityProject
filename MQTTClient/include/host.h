@@ -73,6 +73,6 @@ void verify_challenge_response(const char* response_payload, host_t *host);
 void respond_to_challenge(host_t* host, const char* challenge_payload); 
 void challenge_task(void *pvParameter);
 void publish_challenge(host_t* host); 
-uint32_t compute_response(uint32_t nonce); 
+uint32_t compute_nonce_xor(uint32_t nonce);
 
 #endif /* __HOST_H__ */
